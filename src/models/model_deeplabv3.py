@@ -23,15 +23,14 @@ class DeepLabV3(nn.Module):
             nn.Conv2d(256, num_classes, kernel_size=1)
         )
 
-        # Upsampling
-        self.upsample = nn.Upsample(scale_factor=16, mode='bilinear', align_corners=False)
-
     def forward(self, x):
-        x = self.backbone(x)  # Extract features
-        x = self.aspp(x)      # ASPP module
-        x = self.classifier(x)  # Classifier
-        x = self.upsample(x)    # Upsample to original resolution
+        input_size = x.shape[-2:]  # Save original input size
+        x = self.backbone(x)       # Extract features
+        x = self.aspp(x)           # ASPP module
+        x = self.classifier(x)     # Classifier
+        x = nn.functional.interpolate(x, size=input_size, mode='bilinear', align_corners=False)  # Upsample
         return x
+
 
 class ASPP(nn.Module):
     def __init__(self, in_channels, out_channels):
