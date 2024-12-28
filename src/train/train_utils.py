@@ -1,5 +1,6 @@
 import os
 import glob
+import json
 
 import matplotlib.pyplot as plt
 
@@ -25,30 +26,45 @@ VIP_AUG_MASK = os.path.join(DATA_DIR, 'vip_aug_mask')
 input_shape = (224, 224)
 
 class Dataset(torch.utils.data.Dataset):
-    def __init__(self, image_paths, mask_paths):
+    def __init__(self, image_paths, mask_paths, mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)):
+        
         self.image_paths = image_paths
         self.mask_paths = mask_paths
+        self.mean = mean
+        self.std = std
 
-    # get sample
+    def normalize(self, image):
+        
+        return (image - torch.tensor(self.mean)[:, None, None]) / torch.tensor(self.std)[:, None, None]
+
     def __getitem__(self, idx):
+        
         image_file = self.image_paths[idx]
         mask_file = self.mask_paths[idx]
 
         # Make absolute paths
-        image_file = r"{}".format(os.path.abspath(image_file))
-        mask_file = r"{}".format(os.path.abspath(mask_file))
+        image_file = os.path.abspath(image_file)
+        mask_file = os.path.abspath(mask_file)
 
+        # Tensorize image and mask
         image = tensorize_image([image_file], input_shape)
         target = tensorize_mask([mask_file], input_shape, n_class=2)
 
-        # Remove batch dimension, Because dataloader puts batch dimension
+        # Remove batch dimension, because DataLoader adds batch dimension
         image = image.squeeze(0)
         target = target.squeeze(0)
 
-        return image, target
+        # Normalize the image
+        image = self.normalize(image)
+
+        # Return image, target, and paths
+        return image, target, image_file, mask_file
 
     def __len__(self):
+        
         return len(self.image_paths)
+
+
 
 
 def prepare_images_and_masks_path():
@@ -91,7 +107,7 @@ def train_model(config_dict, train_loader, val_loader, best_model_path, epochs=1
     for epoch in range(epochs):
         model.train()
         running_loss = 0.0
-        for data, targets in tqdm.tqdm(train_loader):
+        for data, targets, _, _ in tqdm.tqdm(train_loader):
             data, targets = data.to(device), targets.to(device)
 
             optimizer.zero_grad()
@@ -132,7 +148,7 @@ def evaluate_model(model, val_loader, device='cuda'):
     correct, total = 0, 0
 
     with torch.no_grad():
-        for data, targets in val_loader:
+        for data, targets, _, _ in val_loader:
             data, targets = data.to(device), targets.to(device)
             outputs = model(data)
             loss = criterion(outputs, targets)
@@ -192,34 +208,49 @@ def save_best_model(model, val_loss, save_path):
     torch.save(model, save_path)
     print(f"Best model saved to {save_path} with validation loss {val_loss:.4f}")
 
-def save_metrics(metrics, save_path):
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    with open(save_path, 'w') as file:
-        for key, value in metrics.items():
-            file.write(f"{key}: {value}\n")
-    print(f"Metrics saved to {save_path}")
 
-def save_plot(train_losses, val_losses, val_accuracies, save_path):
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    val_accuracies_list = []
-    for val_ac in val_accuracies:
-        val_accuracies_list.append(val_ac.cpu())
+def save_metrics(metrics, file_path):
+    """Save metrics to a file in JSON format."""
+    with open(file_path, 'w') as f:
+        json.dump(metrics, f, indent=4)
+    print(f"Metrics saved to {file_path}")
 
+def save_plot(train_losses, val_losses, val_accuracies, save_dir):
+    os.makedirs(save_dir, exist_ok=True)  # Ensure the directory exists
+    
+    # Convert validation accuracies to a list of numbers
+    val_accuracies_list = [val_ac.cpu() for val_ac in val_accuracies]
+
+    # Save Training and Validation Losses plot
     plt.figure(figsize=(10, 6))
     plt.plot(train_losses, label="Training Loss")
     plt.plot(val_losses, label="Validation Loss")
     plt.xlabel("Epochs")
-    plt.ylabel("Metrics")
+    plt.ylabel("Loss")
     plt.legend()
     plt.title("Training and Validation Losses")
-    plt.savefig(save_path)
+    loss_plot_path = os.path.join(save_dir, "loss_plot.png")
+    plt.savefig(loss_plot_path)
     plt.close()
 
-    plt.figure(figsize=(10,6))
+    # Save Validation Accuracy plot
+    plt.figure(figsize=(10, 6))
     plt.plot(val_accuracies_list, label="Validation Accuracy")
     plt.xlabel("Epochs")
-    plt.ylabel("Accuracies")
+    plt.ylabel("Accuracy")
+    plt.legend()
     plt.title("Validation Accuracy")
-    plt.savefig(save_path)
+    accuracy_plot_path = os.path.join(save_dir, "accuracy_plot.png")
+    plt.savefig(accuracy_plot_path)
     plt.close()
-    print(f"Plot saved to {save_path}")
+
+    print(f"Loss plot saved to {loss_plot_path}")
+    print(f"Accuracy plot saved to {accuracy_plot_path}")
+
+
+
+def save_list(save_path, image_list, mask_list):
+    with open(save_path, 'w') as f:
+        for img, mask in zip(image_list, mask_list):
+            f.write(f"{img},{mask}\n")
+    print(f"List saved to {save_path}")

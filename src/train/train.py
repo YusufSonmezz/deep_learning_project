@@ -17,7 +17,7 @@ from train_utils import *
 valid_size = 0.15
 test_size  = 0.15
 B = 10  # batch size
-epochs = 5
+epochs = 6
 cuda = True
 input_shape = (224, 224)
 n_classes = 2
@@ -29,41 +29,56 @@ image_paths, mask_paths = prepare_images_and_masks_path()
 
 print("Number of images found: ", len(image_paths))
 
-dataset = Dataset(image_paths, mask_paths)
+# Initialize dataset
+dataset = Dataset(
+    image_paths=image_paths,
+    mask_paths=mask_paths,
+    mean=(0.485, 0.456, 0.406),
+    std=(0.229, 0.224, 0.225)
+)
 
-# lets split the dataset into three parts (train 70%, test 15%, validation 15%)
+# Split the dataset into three parts (train 70%, test 15%, validation 15%)
 test_size = 0.15
 val_size = 0.15
 
-test_amount, val_amount = int(dataset.__len__() * test_size), int(dataset.__len__() * val_size)
+test_amount = int(len(dataset) * test_size)
+val_amount = int(len(dataset) * val_size)
 
-# this function will automatically randomly split your dataset but you could also implement the split yourself
-train_set, val_set, test_set = torch.utils.data.random_split(dataset, [
-            (dataset.__len__() - (test_amount + val_amount)), 
-            test_amount, 
-            val_amount
-])
+train_set, val_set, test_set = torch.utils.data.random_split(
+    dataset, 
+    [(len(dataset) - (test_amount + val_amount)), test_amount, val_amount]
+)
 
+# Saving test images and masks paths to evaluate after training
+test_image_paths = [dataset.image_paths[idx] for idx in test_set.indices]
+test_mask_paths = [dataset.mask_paths[idx] for idx in test_set.indices]
+
+# Define dataloaders
 train_dataloader = torch.utils.data.DataLoader(
-            train_set,
-            batch_size=B,
-            shuffle=True,
+    train_set,
+    batch_size=B,
+    shuffle=True,
 )
+
 val_dataloader = torch.utils.data.DataLoader(
-            val_set,
-            batch_size=B,
-            shuffle=True,
+    val_set,
+    batch_size=B,
+    shuffle=True,
 )
+
 test_dataloader = torch.utils.data.DataLoader(
-            test_set,
-            batch_size=B,
-            shuffle=True,
+    test_set,
+    batch_size=B,
+    shuffle=True,
 )
 
-print("Number of images in train set: ", len(train_set))
-print("Number of images in validation set: ", len(val_set))
-print("Number of images in test set: ", len(test_set))
+# Paths for saving lists
+test_list_path = r"C:\Users\Yusuf\Desktop\YL\1. Donem\Derin Ogrenme\Proje\data\test_list.txt"
 
+save_list(test_list_path, test_image_paths, test_mask_paths)
+
+# Print dataset size
+print("Number of images in test set:", len(test_set))
 
 # Call Models
 unet = UNet(input_shape, n_classes)
@@ -105,27 +120,49 @@ for i, config_dict in enumerate(models_config):
     os.makedirs(model_output_dir, exist_ok=True)
 
     best_model_path = os.path.join(model_output_dir, f"{model_name}_best_model.pth")
-    plot_path = os.path.join(model_output_dir, f"{model_name}_metrics.png")
-    metrics_file_path = os.path.join(model_output_dir, f"{model_name}_metrics.txt")
+    plot_path = os.path.join(model_output_dir, f"{model_name}_metrics")
+    metrics_file_path = os.path.join(model_output_dir, f"{model_name}_metrics.json")
 
     print(f"\nTraining Model {i+1} ({model_name})")
-    train_losses, val_losses, val_accuracies = train_model(config_dict, 
-                                                           train_dataloader, 
-                                                           val_dataloader, 
-                                                           best_model_path, 
-                                                           epochs=epochs, 
-                                                           device='cuda')
+    train_losses, val_losses, val_accuracies = train_model(
+        config_dict, 
+        train_dataloader, 
+        val_dataloader, 
+        best_model_path, 
+        epochs=epochs, 
+        device='cuda'
+    )
 
+    # Log epoch-wise data
+    epoch_metrics = []
+    for epoch in range(len(train_losses)):
+        epoch_metrics.append({
+            "epoch": epoch + 1,
+            "train_loss": train_losses[epoch],
+            "val_loss": val_losses[epoch],
+            "val_accuracy": val_accuracies[epoch].item() if hasattr(val_accuracies[epoch], 'item') else val_accuracies[epoch],
+        })
 
-    # Plot training results for this model
-    plot_metrics(train_losses, val_losses, val_accuracies)
-
+    # Calculate summary metrics
     best_val_loss = min(val_losses)
+    best_epoch = val_losses.index(best_val_loss) + 1
+    final_val_accuracy = val_accuracies[-1].item() if hasattr(val_accuracies[-1], 'item') else val_accuracies[-1]
 
-    # Save the metrics and plot at the end of training
-    save_plot(train_losses, val_losses, val_accuracies, plot_path)
-    metrics = {
+    summary_metrics = {
         "Best Validation Loss": best_val_loss,
-        "Final Validation Accuracy": val_accuracies[-1]
+        "Best Epoch": best_epoch,
+        "Final Validation Accuracy": final_val_accuracy,
+        "Total Epochs": len(train_losses),
     }
-    save_metrics(metrics, metrics_file_path)
+
+    # Combine all metrics into a single JSON
+    all_metrics = {
+        "epoch_metrics": epoch_metrics,
+        "summary_metrics": summary_metrics,
+    }
+
+    # Save plots and metrics
+    save_plot(train_losses, val_losses, val_accuracies, plot_path)
+    save_metrics(all_metrics, metrics_file_path)
+
+    print(f"Model {model_name} training completed.")
